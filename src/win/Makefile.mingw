@@ -72,6 +72,9 @@ ifeq ($(DEV_BUILD), y)
  ifndef S3TRIO3D2X
   S3TRIO3D2X	:= y
  endif
+ ifndef RIVATNT
+  RIVATNT	:= y
+ endif
  ifndef SIO_DETECT
   SIO_DETECT	:= y
  endif
@@ -144,6 +147,9 @@ else
  endif
  ifndef S3TRIO3D2X
   S3TRIO3D2X	:= n
+  endif
+ ifndef RIVATNT
+  RIVATNT	:= n
  endif
  ifndef SIO_DETECT
   SIO_DETECT	:= n
@@ -536,6 +542,11 @@ endif
 
 ifeq ($(S3TRIO3D2X), y)
 OPTS		+= -DUSE_S3TRIO3D2X
+endif
+
+ifeq ($(RIVATNT), y)
+OPTS		+= -DUSE_RIVATNT
+DEVBROBJ	+= vid_rivatnt.o
 endif
 
 ifeq ($(SIO_DETECT), y)
