@@ -11,9 +11,11 @@
  *
  *
  * Authors:	Sarah Walker, <http://pcem-emulator.co.uk/>
- *		leilei
+ *		leilei,
+ *              Melissa Goad
  *
  *		Copyright 2008-2018 Sarah Walker.
+ *              Copyright 2020 Melissa Goad.
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -53,7 +55,8 @@ enum
 {
         VOODOO_1 = 0,
         VOODOO_SB50 = 1,
-        VOODOO_2 = 2
+        VOODOO_2 = 2,
+        VOODOO_BANSHEE = 3,
 };
 
 static uint32_t texture_offset[LOD_MAX+3] =
@@ -226,6 +229,9 @@ typedef struct vert_t
 typedef struct voodoo_t
 {
         mem_mapping_t mapping;
+        rom_t bios_rom;
+
+        uint8_t bios_bar[4]; /*Voodoo Banshee*/
                 
         int pci_enable;
 
@@ -6833,7 +6839,7 @@ static void voodoo_recalcmapping(voodoo_set_t *set)
 {
         if (set->nr_cards == 2)
         {
-                if (set->voodoos[0]->pci_enable && set->voodoos[0]->memBaseAddr)
+                if ((set->voodoos[0]->pci_enable & 2) && set->voodoos[0]->memBaseAddr)
                 {
                         if (set->voodoos[0]->type == VOODOO_2 && set->voodoos[1]->initEnable & (1 << 23))
                         {
@@ -6841,7 +6847,7 @@ static void voodoo_recalcmapping(voodoo_set_t *set)
                                 mem_mapping_disable(&set->voodoos[0]->mapping);
                                 mem_mapping_set_addr(&set->snoop_mapping, set->voodoos[0]->memBaseAddr, 0x01000000);
                         }
-                        else if (set->voodoos[1]->pci_enable && (set->voodoos[0]->memBaseAddr == set->voodoos[1]->memBaseAddr))
+                        else if ((set->voodoos[1]->pci_enable & 2) && (set->voodoos[0]->memBaseAddr == set->voodoos[1]->memBaseAddr))
                         {
                                 voodoo_log("voodoo_recalcmapping (pri) (sec) same addr : memBaseAddr %08X\n", set->voodoos[0]->memBaseAddr);
                                 mem_mapping_disable(&set->voodoos[0]->mapping);
@@ -6862,7 +6868,7 @@ static void voodoo_recalcmapping(voodoo_set_t *set)
                         mem_mapping_disable(&set->voodoos[0]->mapping);
                 }
 
-                if (set->voodoos[1]->pci_enable && set->voodoos[1]->memBaseAddr)
+                if ((set->voodoos[1]->pci_enable & 2) && set->voodoos[1]->memBaseAddr)
                 {
                         voodoo_log("voodoo_recalcmapping (sec) : memBaseAddr %08X\n", set->voodoos[1]->memBaseAddr);
                         mem_mapping_set_addr(&set->voodoos[1]->mapping, set->voodoos[1]->memBaseAddr, 0x01000000);
@@ -6876,8 +6882,31 @@ static void voodoo_recalcmapping(voodoo_set_t *set)
         else
         {
                 voodoo_t *voodoo = set->voodoos[0];
+                if(voodoo->type == VOODOO_BANSHEE)
+                {
+                        if(!(voodoo->pci_enable & 2)) mem_mapping_disable(&voodoo->svga->mapping);
+                        else switch (voodoo->svga->gdcreg[6] & 0xc) /*VGA mapping*/
+	                {
+		                case 0x0: /*128k at A0000*/
+		                mem_mapping_set_addr(&voodoo->svga->mapping, 0xa0000, 0x20000);
+		                voodoo->svga->banked_mask = 0xffff;
+		                break;
+		                case 0x4: /*64k at A0000*/
+		                mem_mapping_set_addr(&voodoo->svga->mapping, 0xa0000, 0x10000);
+		                voodoo->svga->banked_mask = 0xffff;
+                		break;
+		                case 0x8: /*32k at B0000*/
+                		mem_mapping_set_addr(&voodoo->svga->mapping, 0xb0000, 0x08000);
+		                voodoo->svga->banked_mask = 0x7fff;
+                		break;
+		                case 0xC: /*32k at B8000*/
+                		mem_mapping_set_addr(&voodoo->svga->mapping, 0xb8000, 0x08000);
+		                voodoo->svga->banked_mask = 0x7fff;
+                		break;
+	                }
+                }
                 
-                if (voodoo->pci_enable && voodoo->memBaseAddr)
+                if ((voodoo->pci_enable & 2) && voodoo->memBaseAddr)
                 {
                         voodoo_log("voodoo_recalcmapping : memBaseAddr %08X\n", voodoo->memBaseAddr);
                         mem_mapping_set_addr(&voodoo->mapping, voodoo->memBaseAddr, 0x01000000);
@@ -6905,13 +6934,15 @@ uint8_t voodoo_pci_read(int func, int addr, void *p)
                 case 0x01: return 0x12;
                 
                 case 0x02:
-                if (voodoo->type == VOODOO_2)
+                if (voodoo->type == VOODOO_BANSHEE)
+                        return 0x03; /*Voodoo Banshee*/
+                else if (voodoo->type == VOODOO_2)
                         return 0x02; /*Voodoo 2*/
                 else
                         return 0x01; /*SST-1 (Voodoo Graphics)*/
                 case 0x03: return 0x00;
                 
-                case 0x04: return voodoo->pci_enable ? 0x02 : 0x00; /*Respond to memory accesses*/
+                case 0x04: return voodoo->pci_enable; /*Respond to memory accesses*/
 
                 case 0x08: return 2; /*Revision ID*/
                 case 0x09: return 0; /*Programming interface*/
@@ -6949,7 +6980,7 @@ void voodoo_pci_write(int func, int addr, uint8_t val, void *p)
         switch (addr)
         {
                 case 0x04:
-                voodoo->pci_enable = val & 2;
+                voodoo->pci_enable = val & 3;
                 voodoo_recalcmapping(voodoo->set);
                 break;
                 
@@ -6957,6 +6988,16 @@ void voodoo_pci_write(int func, int addr, uint8_t val, void *p)
                 voodoo->memBaseAddr = val << 24;
                 voodoo_recalcmapping(voodoo->set);
                 break;
+
+                case 0x30: case 0x32: case 0x33:
+                if(voodoo->type < VOODOO_BANSHEE) break;
+		voodoo->bios_bar[addr - 0x30] = val;
+		if (voodoo->bios_bar[0] & 0x01) {
+			uint32_t addr = (voodoo->bios_bar[2] << 16) | (voodoo->bios_bar[3] << 24);
+			mem_mapping_set_addr(&voodoo->bios_rom.mapping, addr, 0x8000);
+		} else
+			mem_mapping_disable(&voodoo->bios_rom.mapping);
+		break;
                 
                 case 0x40:
                 voodoo->initEnable = (voodoo->initEnable & ~0x000000ff) | val;
@@ -7532,13 +7573,79 @@ static void voodoo_speed_changed(void *p)
                 voodoo_set->voodoos[1]->burst_time = pci_burst_time * ((voodoo_set->voodoos[1]->fbiInit1 & 2) ? 2 : 1);
         }
 //        voodoo_log("Voodoo read_time=%i write_time=%i burst_time=%i %08x %08x\n", voodoo->read_time, voodoo->write_time, voodoo->burst_time, voodoo->fbiInit1, voodoo->fbiInit4);
+
+        if(voodoo_set->voodoos[0]->type == VOODOO_BANSHEE) svga_recalctimings(voodoo_set->voodoos[0]->svga);
 }
 
-void *voodoo_card_init()
+void voodoo_out(uint16_t addr, uint8_t val, void *p)
+{
+        voodoo_set_t* set = (voodoo_set_t*)p;
+        voodoo_t *voodoo = (voodoo_t *)set->voodoos[0];
+        svga_t *svga = voodoo->svga;
+        uint8_t old;
+
+        if (((addr & 0xfff0) == 0x3d0 || (addr & 0xfff0) == 0x3b0) && !(svga->miscout & 1)) 
+                addr ^= 0x60;
+
+        switch (addr)
+        {
+                case 0x3D4:
+                svga->crtcreg = val;
+                return;
+                case 0x3D5:
+		if (svga->crtcreg & 0x20)
+			return;
+                if ((svga->crtcreg < 7) && (svga->crtc[0x11] & 0x80))
+                        return;
+                if ((svga->crtcreg == 7) && (svga->crtc[0x11] & 0x80))
+                        val = (svga->crtc[7] & ~0x10) | (val & 0x10);
+                old = svga->crtc[svga->crtcreg];
+                svga->crtc[svga->crtcreg] = val;
+                if (old != val)
+                {
+                        if (svga->crtcreg < 0xe || svga->crtcreg > 0x10)
+                        {
+                                svga->fullchange = changeframecount;
+                                svga_recalctimings(svga);
+                        }
+                }
+                break;
+        }
+        svga_out(addr, val, svga);
+}
+
+uint8_t voodoo_in(uint16_t addr, void *p)
+{
+        voodoo_set_t* set = (voodoo_set_t*)p;
+        voodoo_t *voodoo = (voodoo_t *)set->voodoos[0];
+        svga_t *svga = voodoo->svga;
+        uint8_t temp;
+
+        if (((addr & 0xfff0) == 0x3d0 || (addr & 0xfff0) == 0x3b0) && !(svga->miscout & 1)) 
+                addr ^= 0x60;
+             
+        switch (addr)
+        {
+                case 0x3D4:
+                temp = svga->crtcreg;
+                break;
+                case 0x3D5:
+                temp = svga->crtc[svga->crtcreg];
+                break;
+                default:
+                temp = svga_in(addr, svga);
+                break;
+        }
+        return temp;
+}
+
+void *voodoo_card_init(const device_t *info, int type, voodoo_set_t* set)
 {
         int c;
         voodoo_t *voodoo = malloc(sizeof(voodoo_t));
         memset(voodoo, 0, sizeof(voodoo_t));
+
+        voodoo->set = set;
 
         voodoo->bilinear_enabled = device_get_config_int("bilinear");
         voodoo->scrfilter = device_get_config_int("dacfilter");
@@ -7551,7 +7658,7 @@ void *voodoo_card_init()
 #ifndef NO_CODEGEN
         voodoo->use_recompiler = device_get_config_int("recompiler");
 #endif                        
-        voodoo->type = device_get_config_int("type");
+        voodoo->type = type;
         switch (voodoo->type)
         {
                 case VOODOO_1:
@@ -7563,16 +7670,32 @@ void *voodoo_card_init()
                 case VOODOO_2:
                 voodoo->dual_tmus = 1;
                 break;
+                case VOODOO_BANSHEE:
+                voodoo->dual_tmus = 0;
+                break;
         }
         
-	if (voodoo->type == VOODOO_2) /*generate filter lookup tables*/
+	if (voodoo->type == VOODOO_2 || voodoo->type == VOODOO_BANSHEE) /*generate filter lookup tables, not sure if this is right for banshee*/
 		voodoo_generate_filter_v2(voodoo);
 	else
 		voodoo_generate_filter_v1(voodoo);
         
         pci_add_card(PCI_ADD_NORMAL, voodoo_pci_read, voodoo_pci_write, voodoo);
 
+        if(voodoo->type == VOODOO_BANSHEE)
+        {
+                rom_init(&voodoo->bios_rom, L"roms/video/voodoo/banshee-a-trend.VBI", 0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
+                mem_mapping_disable(&voodoo->bios_rom.mapping);
+        }
+
         mem_mapping_add(&voodoo->mapping, 0, 0, NULL, voodoo_readw, voodoo_readl, NULL, voodoo_writew, voodoo_writel,     NULL, MEM_MAPPING_EXTERNAL, voodoo);
+
+        if(voodoo->type == VOODOO_BANSHEE) {
+                voodoo->svga = malloc(sizeof(svga_t));
+                memset(voodoo->svga, 0, sizeof(svga_t));
+                svga_init(info, voodoo->svga, voodoo->set, 16 << 20, NULL, voodoo_in, voodoo_out, NULL, NULL);
+                mem_mapping_set_handler(&voodoo->svga->mapping, svga_read, svga_readw, svga_readl, svga_write, svga_writew, svga_writel);
+        }
 
         voodoo->fb_mem = malloc(4 * 1024 * 1024);
         voodoo->tex_mem[0] = malloc(voodoo->texture_size * 1024 * 1024);
@@ -7596,7 +7719,7 @@ void *voodoo_card_init()
 
         timer_add(&voodoo->timer, voodoo_callback, voodoo, 1);
         
-        voodoo->svga = svga_get_pri();
+        if(voodoo->type < VOODOO_BANSHEE) voodoo->svga = svga_get_pri();
         voodoo->fbiInit0 = 0;
 
         voodoo->wake_fifo_thread = thread_create_event();
@@ -7671,7 +7794,7 @@ void *voodoo_card_init()
         return voodoo;
 }
 
-void *voodoo_init()
+void *voodoo_init(const device_t *info)
 {
         voodoo_set_t *voodoo_set = malloc(sizeof(voodoo_set_t));
         uint32_t tmuConfig = 1;
@@ -7681,11 +7804,10 @@ void *voodoo_init()
         type = device_get_config_int("type");
         
         voodoo_set->nr_cards = device_get_config_int("sli") ? 2 : 1;
-        voodoo_set->voodoos[0] = voodoo_card_init();
-        voodoo_set->voodoos[0]->set = voodoo_set;
+        voodoo_set->voodoos[0] = voodoo_card_init(info, type, voodoo_set);
         if (voodoo_set->nr_cards == 2)
         {
-                voodoo_set->voodoos[1] = voodoo_card_init();
+                voodoo_set->voodoos[1] = voodoo_card_init(info, type, voodoo_set);
                                 
                 voodoo_set->voodoos[1]->set = voodoo_set;
 
@@ -7723,6 +7845,26 @@ void *voodoo_init()
         voodoo_set->voodoos[0]->tmuConfig = tmuConfig;
         if (voodoo_set->nr_cards == 2)
                 voodoo_set->voodoos[1]->tmuConfig = tmuConfig;
+
+        mem_mapping_add(&voodoo_set->snoop_mapping, 0, 0, NULL, voodoo_snoop_readw, voodoo_snoop_readl, NULL, voodoo_snoop_writew, voodoo_snoop_writel,     NULL, MEM_MAPPING_EXTERNAL, voodoo_set);
+                
+        return voodoo_set;
+}
+
+void *voodoo_banshee_init(const device_t *info)
+{
+        voodoo_set_t *voodoo_set = malloc(sizeof(voodoo_set_t));
+        uint32_t tmuConfig = 1;
+        int type;
+        memset(voodoo_set, 0, sizeof(voodoo_set_t));
+        
+        type = VOODOO_BANSHEE;
+        voodoo_set->nr_cards = 1;
+        
+        voodoo_set->voodoos[0] = voodoo_card_init(info, type, voodoo_set);
+        tmuConfig = 1;
+        
+        voodoo_set->voodoos[0]->tmuConfig = tmuConfig;
 
         mem_mapping_add(&voodoo_set->snoop_mapping, 0, 0, NULL, voodoo_snoop_readw, voodoo_snoop_readl, NULL, voodoo_snoop_writew, voodoo_snoop_writel,     NULL, MEM_MAPPING_EXTERNAL, voodoo_set);
                 
@@ -7904,6 +8046,53 @@ static const device_config_t voodoo_config[] =
         }
 };
 
+static const device_config_t voodoo_banshee_config[] =
+{
+        {
+                .name = "bilinear",
+                .description = "Bilinear filtering",
+                .type = CONFIG_BINARY,
+                .default_int = 1
+        },
+        {
+                .name = "dacfilter",
+                .description = "Screen Filter",
+                .type = CONFIG_BINARY,
+                .default_int = 0
+        },
+        {
+                .name = "render_threads",
+                .description = "Render threads",
+                .type = CONFIG_SELECTION,
+                .selection =
+                {
+                        {
+                                .description = "1",
+                                .value = 1
+                        },
+                        {
+                                .description = "2",
+                                .value = 2
+                        },
+                        {
+                                .description = ""
+                        }
+                },
+                .default_int = 2
+        },
+#ifndef NO_CODEGEN
+        {
+                .name = "recompiler",
+                .description = "Recompiler",
+                .type = CONFIG_BINARY,
+                .default_int = 1
+        },
+#endif
+        {
+                .type = -1
+        }
+};
+
 const device_t voodoo_device =
 {
         "3DFX Voodoo Graphics",
@@ -7916,4 +8105,18 @@ const device_t voodoo_device =
         voodoo_speed_changed,
         NULL,
         voodoo_config
+};
+
+const device_t voodoo_banshee_device =
+{
+        "3DFX Voodoo Banshee",
+        DEVICE_PCI,
+	0,
+        voodoo_banshee_init,
+        voodoo_close,
+	NULL,
+        NULL,
+        voodoo_speed_changed,
+        NULL,
+        voodoo_banshee_config
 };

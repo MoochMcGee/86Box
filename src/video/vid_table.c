@@ -111,6 +111,7 @@ video_cards[] = {
     { "[ISA] Wyse 700",					"wy700",		&wy700_device				},
     { "[MCA] IBM 1MB SVGA Adapter/A (CL-GD 5428)",	"ibm1mbsvga",		&gd5428_mca_device			},
     { "[MCA] Tseng ET4000AX",				"et4000mca",		&et4000_mca_device			},
+    { "[PCI] 3dfx Voodoo Banshee", "voodoo_banshee", &voodoo_banshee_device},
     { "[PCI] ATI Graphics Pro Turbo (Mach64 GX)",	"mach64gx_pci",		&mach64gx_pci_device			},
     { "[PCI] ATI Video Xpression (Mach64 VT2)",		"mach64vt2",		&mach64vt2_device			},
     { "[PCI] Cardex Tseng ET4000/w32p",			"et4000w32p_pci",	&et4000w32p_cardex_pci_device		},
