@@ -6944,15 +6944,20 @@ uint8_t voodoo_pci_read(int func, int addr, void *p)
                 
                 case 0x04: return voodoo->pci_enable; /*Respond to memory accesses*/
 
-                case 0x08: return 2; /*Revision ID*/
+                case 0x08: return (voodoo->type == VOODOO_BANSHEE) ? 0 : 2; /*Revision ID*/
                 case 0x09: return 0; /*Programming interface*/
                 case 0x0a: return 0;
-                case 0x0b: return 0x04;
+                case 0x0b: return (voodoo->type == VOODOO_BANSHEE) ? 0x03 : 0x04;
                 
                 case 0x10: return 0x00; /*memBaseAddr*/
                 case 0x11: return 0x00;
                 case 0x12: return 0x00;
                 case 0x13: return voodoo->memBaseAddr >> 24;
+
+                case 0x30: return voodoo->bios_bar[0];
+                case 0x31: return 0;
+                case 0x32: return voodoo->bios_bar[2];
+                case 0x33: return voodoo->bios_bar[3];
 
                 case 0x40:
                 return voodoo->initEnable & 0xff;
@@ -7680,7 +7685,7 @@ void *voodoo_card_init(const device_t *info, int type, voodoo_set_t* set)
 	else
 		voodoo_generate_filter_v1(voodoo);
         
-        pci_add_card(PCI_ADD_NORMAL, voodoo_pci_read, voodoo_pci_write, voodoo);
+        pci_add_card((voodoo->type == VOODOO_BANSHEE) ? PCI_ADD_VIDEO : PCI_ADD_NORMAL, voodoo_pci_read, voodoo_pci_write, voodoo);
 
         if(voodoo->type == VOODOO_BANSHEE)
         {
