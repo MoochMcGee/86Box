@@ -107,6 +107,11 @@ typedef struct rivatnt_t
 	
 	struct
 	{
+		uint32_t intr, intr_en;
+	} pcrtc;
+
+	struct
+	{
 		uint32_t nvpll, mpll, vpll;
 	} pramdac;
 
@@ -277,11 +282,12 @@ rivatnt_pmc_recompute_intr(void *p)
 	uint32_t intr = 0;
 	if(rivatnt->pfifo.intr & rivatnt->pfifo.intr_en) intr |= (1 << 8);
 	if(rivatnt->ptimer.intr & rivatnt->ptimer.intr_en) intr |= (1 << 20);
+	if(rivatnt->pcrtc.intr & rivatnt->pcrtc.intr_en) intr |= (1 << 24);
 	if(rivatnt->pmc.intr & (1u << 31)) intr |= (1u << 31);
 	
 	if((intr & 0x7fffffff) && (rivatnt->pmc.intr_en & 1)) pci_set_irq(rivatnt->card, PCI_INTA);
 	else if((intr & (1 << 31)) && (rivatnt->pmc.intr_en & 2)) pci_set_irq(rivatnt->card, PCI_INTA);
-	else pci_clear_irq(rivatnt->card, PCI_INTA);
+	//else pci_clear_irq(rivatnt->card, PCI_INTA);
 	return intr;
 }
 
@@ -293,7 +299,7 @@ rivatnt_pmc_read(uint32_t addr, void *p)
 	switch(addr)
 	{
 	case 0x000000:
-		return 0x20004000; //ID register.
+		return 0x20104010; //ID register.
 	case 0x000100:
 		return rivatnt_pmc_recompute_intr(rivatnt);
 	case 0x000140:
@@ -432,6 +438,37 @@ rivatnt_pextdev_read(uint32_t addr, void *p)
 }
 
 uint32_t
+rivatnt_pcrtc_read(uint32_t addr, void *p)
+{
+	rivatnt_t *rivatnt = (rivatnt_t *)p;
+	switch(addr)
+	{
+		case 0x600100:
+			return rivatnt->pcrtc.intr;
+		case 0x600140:
+			return rivatnt->pcrtc.intr_en;
+	}
+	return 0;
+}
+
+void
+rivatnt_pcrtc_write(uint32_t addr, uint32_t val, void *p)
+{
+	rivatnt_t *rivatnt = (rivatnt_t *)p;
+	switch(addr)
+	{
+		case 0x600100:
+			rivatnt->pcrtc.intr &= ~val;
+			rivatnt_pmc_recompute_intr(rivatnt);
+			break;
+		case 0x600140:
+			rivatnt->pcrtc.intr_en = val & 1;
+			rivatnt_pmc_recompute_intr(rivatnt);
+			break;
+	}
+}
+
+uint32_t
 rivatnt_pramdac_read(uint32_t addr, void *p)
 {
 	rivatnt_t *rivatnt = (rivatnt_t *)p;
@@ -472,7 +509,7 @@ rivatnt_ptimer_tick(void *p)
 	rivatnt_t *rivatnt = (rivatnt_t *)p;
 	//pclog("[RIVA TNT] PTIMER tick! mul %04x div %04x\n", rivatnt->ptimer.clock_mul, rivatnt->ptimer.clock_div);
 
-	double time = ((double)rivatnt->ptimer.clock_mul * 100.0) / (double)rivatnt->ptimer.clock_div; //Multiply by 100 to avoid timer system limitations.
+	double time = ((double)rivatnt->ptimer.clock_mul * 10.0) / (double)rivatnt->ptimer.clock_div; //Multiply by 10 to avoid timer system limitations.
 	uint32_t tmp;
 	int alarm_check;
 
@@ -533,6 +570,7 @@ rivatnt_mmio_read_l(uint32_t addr, void *p)
 	if ((addr >= 0x009000) && (addr <= 0x009fff)) ret = rivatnt_ptimer_read(addr, rivatnt);
 	if ((addr >= 0x100000) && (addr <= 0x100fff)) ret = rivatnt_pfb_read(addr, rivatnt);
 	if ((addr >= 0x101000) && (addr <= 0x101fff)) ret = rivatnt_pextdev_read(addr, rivatnt);
+	if ((addr >= 0x600000) && (addr <= 0x600fff)) ret = rivatnt_pcrtc_read(addr, rivatnt);
 	if ((addr >= 0x680000) && (addr <= 0x680fff)) ret = rivatnt_pramdac_read(addr, rivatnt);
 	if ((addr >= 0x700000) && (addr <= 0x7fffff)) ret = rivatnt->ramin[(addr & 0xfffff) >> 2];
 	if ((addr >= 0x300000) && (addr <= 0x30ffff)) ret = ((uint32_t *) rivatnt->bios_rom.rom)[(addr & rivatnt->bios_rom.mask) >> 2];
@@ -617,6 +655,7 @@ rivatnt_mmio_write_l(uint32_t addr, uint32_t val, void *p)
 
 	if((addr >= 0x000000) && (addr <= 0x000fff)) rivatnt_pmc_write(addr, val, rivatnt);
 	if((addr >= 0x009000) && (addr <= 0x009fff)) rivatnt_ptimer_write(addr, val, rivatnt);
+	if((addr >= 0x600000) && (addr <= 0x600fff)) rivatnt_pcrtc_write(addr, val, rivatnt);
 	if((addr >= 0x680000) && (addr <= 0x680fff)) rivatnt_pramdac_write(addr, val, rivatnt);
 	if((addr >= 0x700000) && (addr <= 0x7fffff)) rivatnt->ramin[(addr & 0xfffff) >> 2] = val;
 
@@ -933,7 +972,7 @@ rivatnt_recalctimings(svga_t *svga)
 	if(m_m == 0) m_m = 1;
 
 	freq = (freq * m_n) / (m_m << m_p);
-	rivatnt->mtime = 100000000.0 / freq; //Multiply period by 100 to work around timer system limitations.
+	rivatnt->mtime = 10000000.0 / freq; //Multiply period by 10 to work around timer system limitations.
 	timer_on_auto(&rivatnt->mtimer, rivatnt->mtime);
 
 	freq = 13500000;
@@ -945,7 +984,7 @@ rivatnt_recalctimings(svga_t *svga)
 	if(nv_m == 0) nv_m = 1;
 
 	freq = (freq * nv_n) / (nv_m << nv_p);
-	rivatnt->nvtime = 100000000.0 / freq; //Multiply period by 100 to work around timer system limitations.
+	rivatnt->nvtime = 10000000.0 / freq; //Multiply period by 10 to work around timer system limitations.
 	timer_on_auto(&rivatnt->nvtimer, rivatnt->nvtime);
 
 	freq = 13500000;
@@ -958,6 +997,16 @@ rivatnt_recalctimings(svga_t *svga)
 
 	freq = (freq * v_n) / (v_m << v_p);
 	svga->clock = (cpuclock * (double)(1ull << 32)) / freq;
+}
+
+void
+rivatnt_vblank_start(svga_t *svga)
+{
+	rivatnt_t *rivatnt = (rivatnt_t *)svga->p;
+
+	rivatnt->pcrtc.intr |= 1;
+
+	rivatnt_pmc_recompute_intr(rivatnt);
 }
 
 static void
@@ -986,7 +1035,7 @@ static void
 	mem_mapping_add(&rivatnt->linear_mapping, 0, 0, svga_read_linear, svga_readw_linear, svga_readl_linear, svga_write_linear, svga_writew_linear, svga_writel_linear,  NULL, MEM_MAPPING_EXTERNAL, &rivatnt->svga);
 	mem_mapping_disable(&rivatnt->linear_mapping);
 
-	//svga->vblank_start = rivatnt_vblank_start;
+	svga->vblank_start = rivatnt_vblank_start;
 
 	rivatnt->card = pci_add_card(PCI_ADD_VIDEO, rivatnt_pci_read, rivatnt_pci_write, rivatnt);
 
@@ -1086,7 +1135,7 @@ const device_t rivatnt_pci_device =
 	rivatnt_init,
 	rivatnt_close, 
 	NULL,
-	rivatnt_available,
+	{ rivatnt_available },
 	rivatnt_speed_changed,
 	rivatnt_force_redraw,
 	rivatnt_config
